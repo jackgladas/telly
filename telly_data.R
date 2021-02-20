@@ -51,11 +51,22 @@ clean_films <- import_personal_films %>%
          first_watch_flag,
          imdb_key)
 
-x_checks <- clean_films %>%
+#check that my manually entered film names match up with imdb's to ensure I haven't copied the wrong imdb IDs!
+checks_films <- clean_films %>%
   left_join(import_imdb_titles, c("imdb_key" = "tconst")) %>%
   select(film_name, primaryTitle)
+checks_series <- import_personal_series %>%
+  left_join(import_imdb_titles, c("IMDb" = "tconst")) %>%
+  select(Show, primaryTitle)
 
 films <- clean_films %>%
   left_join(import_imdb_titles, c("imdb_key" = "tconst"))
+
 #remove raw imports
 rm(import_personal_films)
+rm(clean_films)
+rm(import_personal_series)
+rm(import_imdb_episodes)
+rm(import_imdb_titles)
+rm(checks_films)
+rm(checks_series)
