@@ -46,36 +46,27 @@ clean_films <- import_personal_films %>%
            is.na(`First Watch`) ~ FALSE
          ),
          type = 'Film') %>%
-  rename(watched_date = Date,
+  select(type,
+         watch_date = Date,
          name = Name,
          my_rating = Rating,
-         cinema = Cinema,
-         imdb_key = IMDb) %>%
-  select(type,
-         watched_date,
-         name,
-         my_rating,
          cinema_flag,
          first_watch_flag,
-         imdb_key)
+         imdb_key = IMDb)
 
 clean_series <- import_personal_series %>%
   mutate(watched_series_id = row_number(),
          type = 'Series',
          season = as.character(Season),
          watch_duration_days = difftime(`End Date`, `Start Date`)) %>%
-  rename(name = Show,
-         imdb_key = IMDb,
-         start_date = 'Start Date',
-         end_date = 'End Date') %>%
   select(type,
-        watched_series_id,
-        start_date,
-        end_date,
-        watch_duration_days,
-        name,
-        season,
-        imdb_key)
+         watched_series_id,
+         start_date = `Start Date`,
+         end_date = `End Date`,
+         watch_duration_days,
+         name = Show,
+         season,
+         imdb_key = IMDb)
 
 #check that my manually entered film names match up with imdb's to ensure I haven't copied the wrong imdb IDs! ----
 checks_films <- clean_films %>%
@@ -88,7 +79,17 @@ checks_series <- clean_series %>%
 #join on imdb data and expand series data to episode-level ----
 films <- clean_films %>%
   left_join(import_imdb_titles, c("imdb_key" = "tconst")) %>%
-  left_join(import_imdb_ratings, c("imdb_key" = "tconst"))
+  left_join(import_imdb_ratings, c("imdb_key" = "tconst")) %>%
+  select(type,
+         watch_date,
+         name = primaryTitle,
+         my_rating,
+         cinema_flag,
+         first_watch_flag,
+         release_year = startYear,
+         runtime = runtimeMinutes,
+         genres,
+         imdb_rating = averageRating)
 
 series <- clean_series %>%
   #join episode data and expand to episode-level
@@ -102,10 +103,23 @@ series <- clean_series %>%
   mutate(season_length = max(episode_number)) %>%
   ungroup() %>%
   mutate(day_watched = round((episode_number-1)*(watch_duration_days)/(season_length-1)),
-         watched_date = as.Date(start_date + day_watched)) %>%
-  filter(episode_number == 1 | episode_number == season_length) %>%
-  select(watched_series_id, start_date, end_date, episode_number, watched_date) %>%
-  arrange(watched_series_id, episode_number)
+         watch_date = as.Date(start_date + day_watched)) %>%
+  ##also interpolate release year here
+  select(
+    type,
+    watch_date,
+    name = primaryTitle,
+    runtime = runtimeMinutes,
+    genres,
+    imdb_rating = averageRating,
+    season,
+    episode_number,
+    watched_series_id,
+    start_date,
+    end_date)
+
+##then union together
+
 
 #clean up raw imports ----
 rm(import_personal_films)
