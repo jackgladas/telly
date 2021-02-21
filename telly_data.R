@@ -30,42 +30,88 @@ import_imdb_titles <- read_delim("title.basics",
                                   escape_double = FALSE)
 download.file("https://datasets.imdbws.com/title.episode.tsv.gz",
               destfile = "title.episode")
-import_imdb_episodes <-read_tsv("title.episode")
+import_imdb_episodes <- read_tsv("title.episode")
+download.file("https://datasets.imdbws.com/title.ratings.tsv.gz",
+             destfile = "title.ratings")
+import_imdb_ratings <- read_tsv("title.ratings")
 
 #basic data cleaning (no joins yet) ----
 clean_films <- import_personal_films %>%
-  mutate(watched_film_id = row_number()) %>%
+  mutate(cinema_flag = case_when(
+          Cinema == 'Yes' ~ TRUE,
+          is.na(Cinema) ~ FALSE
+         ),
+         first_watch_flag = case_when(
+           `First Watch` == 'Yes' ~ TRUE,
+           is.na(`First Watch`) ~ FALSE
+         ),
+         type = 'Film') %>%
   rename(watched_date = Date,
-         film_name = Name,
-         rating = Rating,
+         name = Name,
+         my_rating = Rating,
          cinema = Cinema,
-         first_watch = 'First Watch',
          imdb_key = IMDb) %>%
-  mutate(cinema_flag = as.factor(cinema),
-         first_watch_flag = as.factor(first_watch)) %>%
-  select(watched_film_id,
+  select(type,
          watched_date,
-         film_name,
-         rating,
+         name,
+         my_rating,
          cinema_flag,
          first_watch_flag,
          imdb_key)
 
-#check that my manually entered film names match up with imdb's to ensure I haven't copied the wrong imdb IDs!
+clean_series <- import_personal_series %>%
+  mutate(watched_series_id = row_number(),
+         type = 'Series',
+         season = as.character(Season),
+         watch_duration_days = difftime(`End Date`, `Start Date`)) %>%
+  rename(name = Show,
+         imdb_key = IMDb,
+         start_date = 'Start Date',
+         end_date = 'End Date') %>%
+  select(type,
+        watched_series_id,
+        start_date,
+        end_date,
+        watch_duration_days,
+        name,
+        season,
+        imdb_key)
+
+#check that my manually entered film names match up with imdb's to ensure I haven't copied the wrong imdb IDs! ----
 checks_films <- clean_films %>%
   left_join(import_imdb_titles, c("imdb_key" = "tconst")) %>%
-  select(film_name, primaryTitle)
-checks_series <- import_personal_series %>%
-  left_join(import_imdb_titles, c("IMDb" = "tconst")) %>%
-  select(Show, primaryTitle)
+  select(name, primaryTitle)
+checks_series <- clean_series %>%
+  left_join(import_imdb_titles, c("imdb_key" = "tconst")) %>%
+  select(name, primaryTitle)
 
+#join on imdb data and expand series data to episode-level ----
 films <- clean_films %>%
-  left_join(import_imdb_titles, c("imdb_key" = "tconst"))
+  left_join(import_imdb_titles, c("imdb_key" = "tconst")) %>%
+  left_join(import_imdb_ratings, c("imdb_key" = "tconst"))
 
-#remove raw imports
+series <- clean_series %>%
+  #join episode data and expand to episode-level
+  left_join(import_imdb_episodes, c("imdb_key" = "parentTconst",
+                                    "season" = "seasonNumber")) %>%
+  left_join(import_imdb_ratings, c("tconst" = "tconst")) %>%
+  #join overall series data
+  mutate(episode_number = as.double(episodeNumber)) %>%
+  left_join(import_imdb_titles, c("imdb_key" = "tconst")) %>%
+  group_by(watched_series_id, season) %>%
+  mutate(season_length = max(episode_number)) %>%
+  ungroup() %>%
+  mutate(day_watched = round((episode_number-1)*(watch_duration_days)/(season_length-1)),
+         watched_date = as.Date(start_date + day_watched)) %>%
+  filter(episode_number == 1 | episode_number == season_length) %>%
+  select(watched_series_id, start_date, end_date, episode_number, watched_date) %>%
+  arrange(watched_series_id, episode_number)
+
+#clean up raw imports ----
 rm(import_personal_films)
-rm(clean_films)
 rm(import_personal_series)
+rm(clean_films)
+rm(clean_series)
 rm(import_imdb_episodes)
 rm(import_imdb_titles)
 rm(checks_films)
