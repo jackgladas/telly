@@ -33,19 +33,64 @@ import_imdb_titles <- read_delim("title.basics",
                                          " "),
                                   quoted_na = FALSE,
                                   escape_double = FALSE)
+clean_imdb_titles <- import_imdb_titles %>%
+  select(imdb_title_id = tconst,
+         imdb_name = primaryTitle,
+         title_start_year = startYear,
+         title_end_year = endYear,
+         runtime = runtimeMinutes,
+         genres,
+         title_type = titleType)
 
 #list of tv episodes - 1 row per episode
 download.file("https://datasets.imdbws.com/title.episode.tsv.gz",
               destfile = "title.episode")
 import_imdb_episodes <- read_tsv("title.episode")
+clean_imdb_episodes <- import_imdb_episodes %>%
+  mutate(imdb_season = as.integer(seasonNumber),
+         imdb_episode_number = as.integer(episodeNumber)) %>%
+  select(imdb_episode_id = tconst,
+         imdb_title_id = parentTconst,
+         imdb_season,
+         imdb_episode_number)
 
 #list of ratings - 1 row per film/episode
 download.file("https://datasets.imdbws.com/title.ratings.tsv.gz",
              destfile = "title.ratings")
 import_imdb_ratings <- read_tsv("title.ratings")
+clean_imdb_ratings <- import_imdb_ratings %>%
+  select(imdb_id = tconst,
+         imdb_rating = averageRating)
+
+#list of crew members
+download.file("https://datasets.imdbws.com/title.crew.tsv.gz",
+              destfile = "title.crew")
+import_imdb_crew <- read_tsv("title.crew")
+clean_imdb_crew <- import_imdb_crew %>%
+  select(imdb_id = tconst,
+         director_ids = directors,
+         writer_ids = writers)
+
+#list of principal cast members
+download.file("https://datasets.imdbws.com/title.principals.tsv.gz",
+              destfile = "title.principals")
+import_imdb_principals <- read_tsv("title.principals")
+clean_imdb_cast <- import_imdb_principals %>%
+  filter(category %in% c("actor","actress")) %>%
+  select(imdb_id = tconst,
+         cast_id = nconst
+  )
+
+#list of crew/cast names
+download.file("https://datasets.imdbws.com/name.basics.tsv.gz",
+              destfile = "name.basics")
+import_imdb_names <- read_tsv("name.basics")
+clean_imdb_names <- import_imdb_names %>%
+  select(crew_id = nconst,
+         crew_name = primaryName)
 
 #basic data cleaning of my personal data (no joins to IMDB yet) ----
-clean_films <- import_personal_films %>%
+clean_personal_films <- import_personal_films %>%
   mutate(
     #convert my cinema column to boolean
     cinema_flag = case_when(Cinema == 'Yes' ~ TRUE,
@@ -64,12 +109,10 @@ clean_films <- import_personal_films %>%
     my_rating = Rating,
     cinema_flag,
     first_watch_flag,
-    imdb_title_key = IMDb
+    imdb_title_id = IMDb
   )
-#remove raw import
-rm(import_personal_films)
 
-clean_series <- import_personal_series %>%
+clean_personal_series <- import_personal_series %>%
   mutate(
     #add id for season, to be used later
     watched_season_id = row_number(),
@@ -78,8 +121,6 @@ clean_series <- import_personal_series %>%
     #how long I spent watching that season - or have done so far, if not finished yet
     watch_duration_days = difftime(coalesce(`End Date`, date(today(
       ))), `Start Date`),
-    #converting to character to enable join to IMDB character field later 
-    season = as.character(Season)
   ) %>%
   #only continue with columns of interest, and make naming convention consistent
   select(
@@ -89,18 +130,16 @@ clean_series <- import_personal_series %>%
     end_date = `End Date`,
     watch_duration_days,
     name = Show,
-    season,
+    season = Season,
     latest_episode = `Latest Episode`,
-    imdb_title_key = IMDb
+    imdb_title_id = IMDb
   )
-#remove raw import
-rm(import_personal_series)
 
 #calculate the length (in seasons) of each series, which is later used to estimate the release year of each season
-mapping_series_lengths <- import_imdb_episodes %>%
-  inner_join(clean_series, c("parentTconst" = "imdb_title_key")) %>%
-  group_by(parentTconst) %>%
-  summarise(series_length = max(as.numeric(seasonNumber)))
+mapping_series_lengths <- clean_imdb_episodes %>%
+  inner_join(clean_personal_series, c("imdb_title_id" = "imdb_title_id")) %>%
+  group_by(imdb_title_id) %>%
+  summarise(series_length = max(imdb_season))
 
 #check that my manually entered film names match up with IMDB's ----
 #view each of these and skim through to ensure I haven't copied the wrong IMDB IDs! 
@@ -113,78 +152,156 @@ checks_series <- clean_series %>%
 rm(checks_films, checks_series)
 
 #join on imdb data and expand series data to episode-level ----
-final_films <- clean_films %>%
+final_films <- clean_personal_films %>%
   #get film names, runtimes, years and genres
-  left_join(import_imdb_titles, c("imdb_title_key" = "tconst")) %>%
+  left_join(clean_imdb_titles, "imdb_title_id") %>%
   #get film IMDB ratings
-  left_join(import_imdb_ratings, c("imdb_title_key" = "tconst")) %>%
+  left_join(clean_imdb_ratings, c("imdb_title_id" = "imdb_id")) %>%
   select(type,
          watch_date,
-         name = primaryTitle,
+         name = imdb_name,
          my_rating,
          cinema_flag,
          first_watch_flag,
-         release_year = startYear,
-         runtime = runtimeMinutes,
+         release_year = title_start_year,
+         runtime,
          genres,
-         imdb_rating = averageRating,
-         imdb_title_key)
-rm(clean_films)
+         imdb_rating,
+         imdb_title_id)
 
-final_series <- clean_series %>%
+final_series <- clean_personal_series %>%
   #join to IMDB episode tables to expand to episode-level with episode_number column
-  left_join(import_imdb_episodes, c("imdb_title_key" = "parentTconst",
-                                    "season" = "seasonNumber")) %>%
+  left_join(clean_imdb_episodes, c("imdb_title_id" = "imdb_title_id",
+                                    "season" = "imdb_season")) %>%
   #get max season number for each series
-  left_join(mapping_series_lengths, c("imdb_title_key" = "parentTconst")) %>%
+  left_join(mapping_series_lengths, "imdb_title_id") %>%
   #get IMDB rating for each episode
-  left_join(import_imdb_ratings, c("tconst" = "tconst")) %>%
-  mutate(episode_number = as.double(episodeNumber)) %>%
+  left_join(clean_imdb_ratings, c("imdb_episode_id" = "imdb_id")) %>%
   #for partially-watched seasons, only show episodes that I've seen
   filter(
-    is.na(latest_episode) | episode_number <= latest_episode
+    is.na(latest_episode) | imdb_episode_number <= latest_episode
   ) %>%
   #get series names, start/end years, genres, and typical episode runtimes
-  left_join(import_imdb_titles, c("imdb_title_key" = "tconst")) %>%
+  left_join(clean_imdb_titles, "imdb_title_id") %>%
   group_by(watched_season_id, season) %>%
   #calculate the total number of episodes (up to the latest that I've watched) in the given season
-  mutate(season_length = max(episode_number)) %>%
+  mutate(season_length = max(imdb_episode_number)) %>%
   ungroup() %>%
   mutate(
     #estimate the date on which I watched each episode, based on the date on which I started/finished each season
-    watch_date = as.Date(start_date + (round((episode_number-1)*(watch_duration_days)/(season_length-1)))),
+    watch_date = as.Date(start_date + (round((imdb_episode_number-1)*(watch_duration_days)/(season_length-1)))),
     #estimate the release year of each episode/season, based on the start/end year of the series
     release_year = case_when(
       #if series start year is the same as end year according to imdb, can use the start year as the release year
-      startYear == endYear ~ startYear,
+      title_start_year == title_end_year ~ title_start_year,
       #if (currently) series has only had 1 season, can use start year as release year
-      series_length == 1 ~ startYear,
+      series_length == 1 ~ title_start_year,
       #otherwise interpolate to estimate release year based on current max season number for each series
-      TRUE ~ as.integer(startYear+round((as.numeric(season)-1)*(coalesce(endYear,as.integer(year(today())))-startYear)/(series_length-1)))),
+      TRUE ~ as.integer(title_start_year+round((as.numeric(season)-1)*(coalesce(title_end_year,as.integer(year(today())))-title_start_year)/(series_length-1)))),
     #if series is marked as miniseries then IMDB provides total series runtime for some reason, so need to modify those (with one exception)
     runtime = case_when(
-      imdb_title_key == 'tt0397150' ~ runtimeMinutes,
-      titleType == 'tvMiniSeries' ~ as.integer(round(runtimeMinutes/season_length)),
-      TRUE ~ runtimeMinutes)
+      imdb_title_id == 'tt0397150' ~ runtime,
+      title_type == 'tvMiniSeries' ~ as.integer(round(runtime/season_length)),
+      TRUE ~ runtime)
          ) %>%
   select(
     type,
     watch_date,
-    name = primaryTitle,
+    name = imdb_name,
     release_year,
     runtime,
     genres,
-    imdb_rating = averageRating,
+    imdb_rating,
+    season,
+    episode_number = imdb_episode_number,
+    imdb_title_id,
+    imdb_episode_id
+  )
+
+#then union film and series outputs together to make combined output table ----
+output_watchlist <- final_films %>%
+  union_all(final_series) %>%
+  mutate(imdb_title_url = paste("https://www.imdb.com/title/",imdb_title_id, sep = ""),
+         imdb_id = coalesce(imdb_episode_id, imdb_title_id))
+
+#create crew tables----
+#create directors table
+final_directors <- clean_imdb_crew %>%
+  inner_join(output_watchlist, "imdb_id") %>%
+  mutate(crew_id = strsplit(director_ids, ",")) %>%
+  unnest(crew_id) %>%
+  left_join(clean_imdb_names, "crew_id") %>%
+  mutate(crew_type = "Director") %>%
+  select(
+    type, 
+    crew_type,
+    crew_name,
+    crew_id,
+    type,
+    name,
+    my_rating,
+    cinema_flag,
+    first_watch_flag,
+    runtime,
     season,
     episode_number,
-    imdb_title_key,
-    titleType
+    imdb_title_id,
+    imdb_episode_id,
+    imdb_title_url
   )
-rm(clean_series)
 
+#create writers table
+final_writers <- clean_imdb_crew %>%
+  inner_join(output_watchlist, "imdb_id") %>%
+  mutate(crew_id = strsplit(writer_ids, ",")) %>%
+  unnest(crew_id) %>%
+  left_join(clean_imdb_names, "crew_id") %>%
+  mutate(crew_type = "Writer") %>%
+  select(
+    type, 
+    crew_type,
+    crew_name,
+    crew_id,
+    type,
+    name,
+    my_rating,
+    cinema_flag,
+    first_watch_flag,
+    runtime,
+    season,
+    episode_number,
+    imdb_title_id,
+    imdb_episode_id,
+    imdb_title_url
+  )
 
-##then union film and series outputs together to make combined output table ----
-watchlist_output <- final_films %>%
-  union_all(final_series) %>%
-  mutate(imdb_title_url = paste("https://www.imdb.com/title/",imdb_title_key, sep = ""))
-write_sheet(watchlist_output, gsheet_id, sheet = "Watchlist")
+#create writers table
+final_cast <- clean_imdb_cast %>%
+  inner_join(output_watchlist, "imdb_id") %>%
+  left_join(clean_imdb_names, c("cast_id" = "crew_id")) %>%
+  mutate(crew_type = "Cast") %>%
+  select(
+    type, 
+    crew_type,
+    crew_name,
+    crew_id = cast_id,
+    type,
+    name,
+    my_rating,
+    cinema_flag,
+    first_watch_flag,
+    runtime,
+    season,
+    episode_number,
+    imdb_title_id,
+    imdb_episode_id,
+    imdb_title_url
+  )
+
+output_crewlist <- final_directors %>%
+  union_all(final_writers) %>%
+  union_all(final_cast)
+
+#write data back to sheets----
+write_sheet(output_watchlist, gsheet_id, sheet = "Watchlist")
+write_sheet(output_crewlist, gsheet_id, sheet = "Crewlist")
