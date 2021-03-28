@@ -272,7 +272,8 @@ final_writers <- clean_imdb_crew %>%
     episode_number,
     imdb_title_id,
     imdb_episode_id,
-    imdb_title_url
+    imdb_title_url,
+    imdb_id
   )
 
 #create writers table
@@ -295,7 +296,8 @@ final_cast <- clean_imdb_cast %>%
     episode_number,
     imdb_title_id,
     imdb_episode_id,
-    imdb_title_url
+    imdb_title_url,
+    imdb_id
   )
 
 output_crewlist <- final_directors %>%
