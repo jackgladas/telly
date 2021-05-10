@@ -1,5 +1,5 @@
 # telly
-Analysis of watched TV and film data
+Analysis of watched TV and film data. This R script handles the `Transforming the Data` step described in this blog post.
 
 ### Film input schema:
 * Date (the date on which I watched the film)
